@@ -10,30 +10,9 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   MessageEndEvent,
-  MessageUpdateEvent,
 } from "@earendil-works/pi-coding-agent";
 
-
-/**
- * Pi.dev's TUI takes over stdout, so we shouldn't rely on console.log.
- * It provides a ctx.ui.notify function, which we'll use instead. Note 
- * that when its level is "info", it isn't a persistent log entry; if two 
- * calls happen in succession between other events occurring, the latter 
- * call will overwrite the first. This includes other extensions.
- * 
- * For debugging purposes, we'll use warning.
- * 
- * Moreover, the TUI (as of September, 2026) gives each of these a position
- * in the array of outputs, the elements of which can be updated (e.g., by 
- * streaming replies). 
- */
-function log(ctx: ExtensionContext, message: string) {
-  if (ctx.hasUI) {
-    ctx.ui.notify(message, "warning");
-  } else {
-    console.log(message);
-  }
-}
+import { log, sleep, extractText, estimateTokens } from "./helpers";
 
 /**
  * Sliding window size. Using 1 minute, since it matches the TPM config unit.
@@ -57,26 +36,26 @@ const MAX_DELAY_MS = 20_000;
  */
 const DEBT_FLOOR_MS = 500; 
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
- * Pi's types file defines event.payload as `unknown`. Agent speculation is that 
- * this is because Pi supports many providers, and each may vary its request shape. 
- * 
- * At runtime, we have a real datum, so attempt to parse it and find data 
- * on the estimated input and output token reservation. 
+ * Pi's types file defines event.payload as `unknown`. Agent speculation is that
+ * this is because Pi supports many providers, and each may vary its request shape.
+ *
+ * At runtime, we have a real datum, so attempt to parse it and find data
+ * on the estimated input and output token reservation.
  */
-function payloadHints(payload: unknown): { estInputChars: number; maxOutputTokens: number | undefined } {
+function payloadHints(payload: unknown): { estInputTokens: number; maxOutputTokens: number | undefined } {
   const p = (payload ?? {}) as Record<string, unknown>;
-  const estInputChars = JSON.stringify(p.system ?? "").length + 
-                        JSON.stringify(p.messages ?? []).length;
-  const maxOutputTokens = 
+  // p.system covers Anthropic-shaped payloads; OpenAI-style payloads embed
+  // the system prompt as a role:"system" message inside p.messages instead,
+  // so it's already picked up there - the p.system call is a harmless
+  // no-op for this provider, kept for portability.
+  const text = extractText(p.system) + " " + extractText(p.messages);
+  const estInputTokens = estimateTokens(text);
+  const maxOutputTokens =
     [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
       (v): v is number => typeof v === "number",
   );
-  return { estInputChars, maxOutputTokens };
+  return { estInputTokens, maxOutputTokens };
 }
 
 /**
@@ -86,8 +65,6 @@ function payloadHints(payload: unknown): { estInputChars: number; maxOutputToken
  * @param pi a handle to pi's extensions library
  */
 export default function (pi: ExtensionAPI) {
-  //let loggedEarlyInput = false;
-
   /**
    * A "debt clock" for the "bucket" of available tokens. Once this timestamp
    * is reached, we have no more remaining token debt. (See: GCRA.)
@@ -103,13 +80,12 @@ export default function (pi: ExtensionAPI) {
    * - Delay sending the request, if throttling is called for. 
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
-    //loggedEarlyInput = false;
     const now = Date.now();
     const debtMs = Math.max(0, debtUntil - now);
-    const { estInputChars, maxOutputTokens } = payloadHints(event.payload);
+    const { estInputTokens, maxOutputTokens } = payloadHints(event.payload);
     log(
       ctx,
-      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputChars} input chars, max output=${maxOutputTokens ?? "?"})`,
+      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputTokens} est. input tokens, max output=${maxOutputTokens ?? "?"})`,
     );
 
     if (debtMs > Math.max(0,DEBT_FLOOR_MS)) {
@@ -119,20 +95,6 @@ export default function (pi: ExtensionAPI) {
       await sleep(delay);
     }
   });
-
-  /**
-   * We might get more than one of these events if streaming responses are enabled.
-   * Since our goal is to detect the input-token count early, we don't want to 
-   * do anything here beyond the first update.
-   */
-  // pi.on("message_update", (event: MessageUpdateEvent, ctx: ExtensionContext) => {
-  //   if (loggedEarlyInput || event.message.role !== "assistant") return;
-  //   const { input } = event.message.usage;
-  //   if (input > 0) {
-  //     loggedEarlyInput = true;
-  //     log(ctx, `[throttle] .. input known early: ${input} (stream event: ${event.assistantMessageEvent.type})`);
-  //   }
-  // });
 
   /**
    * A message has ended, so we should know how many output tokens were really used.
