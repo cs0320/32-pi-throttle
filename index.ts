@@ -38,14 +38,36 @@ export default function (pi: ExtensionAPI) {
   const debt = { current: 0 };
 
   /**
-   * Count of provider requests sent but not yet resolved. This extension 
+   * Count of provider requests sent but not yet resolved. This extension
    * is built under the assumption that requests are sequential. If that fails
-   * (e.g., concurrent tool calls), we need to revisit strategy and include 
-   * in-flight calls as reservations to constrain new requests. 
-   * 
+   * (e.g., concurrent tool calls), we need to revisit strategy and include
+   * in-flight calls as reservations to constrain new requests.
+   *
    * Boxed for the same reason as `debt`.
    */
   const inFlight = { count: 0 };
+
+  /**
+   * Diagnostic-only tracking, independent of the `config` knobs above - the
+   * point is to answer "what really happened" without trusting our own
+   * throttle math, so this doesn't feed back into `debt` at all.
+   */
+
+  /** Real per-minute cap as reported by the admin - not `config.windowMs`,
+   * which is what *we* choose to throttle to, and could be wrong. */
+  const REAL_LIMIT_WINDOW_MS = 60_000;
+
+  /** {time, tokens} for every completed (successful or failed) request,
+   * pruned to the trailing REAL_LIMIT_WINDOW_MS - lets us log, on every
+   * request, the actual real-token sum a strict 60s window would show,
+   * to compare against what the provider itself reports remaining. */
+  const usageHistory: { time: number; tokens: number }[] = [];
+
+  /** When the most recent request actually left (after any throttle
+   * delay) - used to log real provider round-trip time, since a hidden
+   * retry inside pi's own request layer would show up as an oddly long
+   * one of these that our hooks can't otherwise see. */
+  const lastRequestSentAt = { current: 0 };
 
   /**
    * A request is about to be sent.
@@ -82,6 +104,8 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.setWorkingMessage();
       }
     }
+
+    lastRequestSentAt.current = Date.now();
   });
 
   /**
@@ -117,19 +141,38 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", (event: MessageEndEvent, ctx: ExtensionContext) => {
     if (event.message.role !== "assistant") return;
     const { input, output, totalTokens } = event.message.usage;
-    log(ctx, `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens}`);
+    const now = Date.now();
+    const roundTripMs = lastRequestSentAt.current ? now - lastRequestSentAt.current : undefined;
+    log(
+      ctx,
+      `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens}${roundTripMs !== undefined ? ` (round trip: ${roundTripMs}ms)` : ""}`,
+    );
+
+    // Diagnostic only - not used for throttling. Real per-`REAL_LIMIT_WINDOW_MS`
+    // token sum as WE observe it, to compare against what the provider says
+    // it's seen (in the error text logged below) when the two disagree.
+    usageHistory.push({ time: now, tokens: totalTokens });
+    while (usageHistory.length && usageHistory[0].time < now - REAL_LIMIT_WINDOW_MS) {
+      usageHistory.shift();
+    }
+    const observedWindowSum = usageHistory.reduce((sum, entry) => sum + entry.tokens, 0);
+    log(ctx, `[throttle] .. observed real usage in trailing ${REAL_LIMIT_WINDOW_MS}ms: ${observedWindowSum} tokens`);
 
     inFlight.count = Math.max(0, inFlight.count - 1);
 
-    const now = Date.now();
     const charge = totalTokens * msPerToken();
     debt.current = Math.max(debt.current, now) + charge;
     log(ctx, `[throttle] .. bucket charged +${Math.round(charge)}ms (debt now clears at +${Math.round(debt.current - now)}ms)`);
 
-    if (event.message.stopReason === "error" && isRateLimitError(event.message.errorMessage)) {
-      const penalized = Date.now();
-      debt.current = Math.max(debt.current, penalized) + config.windowMs;
-      log(ctx, `[throttle] !! rate-limit error - forcing a full window (${config.windowMs}ms) of debt`);
+    if (event.message.stopReason === "error") {
+      if (event.message.errorMessage) {
+        log(ctx, `[throttle] !! error detail: ${event.message.errorMessage}`);
+      }
+      if (isRateLimitError(event.message.errorMessage)) {
+        const penalized = Date.now();
+        debt.current = Math.max(debt.current, penalized) + config.windowMs;
+        log(ctx, `[throttle] !! rate-limit error - forcing a full window (${config.windowMs}ms) of debt`);
+      }
     }
   });
 }
