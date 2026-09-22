@@ -1,1 +1,4 @@
 node_modules/
+prior-art/
+.env
+pi-throttle.log

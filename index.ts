@@ -13,7 +13,7 @@ import type {
   MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import { log, sleep, payloadHints } from "./helpers";
+import { log, sleep, payloadHints, isRateLimitError } from "./helpers";
 import { ThrottleConfig, DEFAULT_CONFIG } from "./defaults";
 
 /**
@@ -75,7 +75,12 @@ export default function (pi: ExtensionAPI) {
       const delay = Math.min(debtMs, config.maxDelayMs);
       const capped = delay < debtMs ? " (capped)" : "";
       log(ctx, `[throttle] bucket owes ${debtMs}ms, delaying ${delay}ms${capped}`);
-      await sleep(delay);
+      ctx.ui.setWorkingMessage(`...Waiting (throttled, ${delay}ms)`);
+      try {
+        await sleep(delay, ctx.signal);
+      } finally {
+        ctx.ui.setWorkingMessage();
+      }
     }
   });
 
@@ -84,6 +89,13 @@ export default function (pi: ExtensionAPI) {
    * immediately fill the debt window. It is not the job of this extension
    * to do any backoff and retry: pi does that itself. Instead, we want to
    * avoid pouring too much "water" into the bucket once a request succeeds.
+   *
+   * In practice this rarely fires: pi retries a failed request internally
+   * before this hook ever runs, and only calls it once that retry resolves
+   * - a request that still fails after those retries are exhausted throws
+   * instead, skipping this hook entirely. Kept as a fallback for provider
+   * paths where a 429 status does reach us this way; `message_end` below is
+   * the handler that reliably sees a terminal rate-limit failure.
    */
   pi.on("after_provider_response", (event: AfterProviderResponseEvent, ctx: ExtensionContext) => {
     if (event.status !== 429) return;
@@ -95,6 +107,12 @@ export default function (pi: ExtensionAPI) {
   /**
    * A message has ended, so we know how many tokens were really used.
    * Charge the bucket with the real usage.
+   *
+   * This also fires for a message that failed after pi exhausted its own
+   * retries (with zero usage, since the request never completed) - that's
+   * pi's one reliable signal that a request came back rate-limited, so a
+   * 429-looking failure here also fills the debt window, same as a "real"
+   * `after_provider_response` 429 would.
    */
   pi.on("message_end", (event: MessageEndEvent, ctx: ExtensionContext) => {
     if (event.message.role !== "assistant") return;
@@ -107,5 +125,11 @@ export default function (pi: ExtensionAPI) {
     const charge = totalTokens * msPerToken();
     debt.current = Math.max(debt.current, now) + charge;
     log(ctx, `[throttle] .. bucket charged +${Math.round(charge)}ms (debt now clears at +${Math.round(debt.current - now)}ms)`);
+
+    if (event.message.stopReason === "error" && isRateLimitError(event.message.errorMessage)) {
+      const penalized = Date.now();
+      debt.current = Math.max(debt.current, penalized) + config.windowMs;
+      log(ctx, `[throttle] !! rate-limit error - forcing a full window (${config.windowMs}ms) of debt`);
+    }
   });
 }
