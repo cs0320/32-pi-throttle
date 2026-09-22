@@ -30,26 +30,12 @@ export default function (pi: ExtensionAPI) {
    * the current configuration. */
   const msPerToken = () => config.windowMs / config.ceilingTokens;
 
-  // --- TEMPORARY TEST HOOK: start (see LEARNINGS.md open question on
-  // whether `await sleep()` in `before_provider_request` really gates the
-  // outbound request) - revert this whole block once verified. ---
-  /**
-   * Forces the very first request of a session to owe an artificially huge,
-   * unmissable delay - chosen larger than any plausible real network/model
-   * latency - so a response that arrives immediately anyway is unambiguous
-   * proof the delay isn't gating dispatch.
-   */
-  const TEST_FORCE_DELAY_MS = 25_000;
-  /** When the most recent `before_provider_request` handler started. */
-  const requestStartedAt = { value: 0 };
-  // --- TEMPORARY TEST HOOK: end (continues below in the two `pi.on` handlers) ---
-
   /**
    * A "debt clock" for the "bucket" of available tokens. Once this timestamp
    * is reached, we have no more remaining token debt. (See: GCRA.) Boxed
    * so the reference can be easily passed to external handler modules.
    */
-  const debt = { current: Date.now() + TEST_FORCE_DELAY_MS }; // TEMPORARY: was `{ current: 0 }`
+  const debt = { current: 0 };
 
   /**
    * Count of provider requests sent but not yet resolved. This extension 
@@ -70,7 +56,6 @@ export default function (pi: ExtensionAPI) {
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     const now = Date.now();
-    requestStartedAt.value = now; // TEMPORARY TEST HOOK
     const debtMs = Math.max(0, debt.current - now);
     const { estInputTokens, maxOutputTokens } = payloadHints(event.payload);
     log(
@@ -101,12 +86,6 @@ export default function (pi: ExtensionAPI) {
    * avoid pouring too much "water" into the bucket once a request succeeds.
    */
   pi.on("after_provider_response", (event: AfterProviderResponseEvent, ctx: ExtensionContext) => {
-    // TEMPORARY TEST HOOK: compare this gap against the "delaying Yms" line
-    // logged in before_provider_request. If this is ever smaller than that
-    // Y, await sleep() is NOT gating the outbound request.
-    const elapsedSinceRequestStarted = Date.now() - requestStartedAt.value;
-    log(ctx, `[throttle][TEST] response headers arrived ${elapsedSinceRequestStarted}ms after before_provider_request started`);
-
     if (event.status !== 429) return;
     const now = Date.now();
     debt.current = Math.max(debt.current, now) + config.windowMs;
