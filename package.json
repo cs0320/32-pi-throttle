@@ -6,6 +6,9 @@
   "scripts": {
     "check": "tsc --noEmit"
   },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.87.0",
     "@types/node": "^22.0.0",
