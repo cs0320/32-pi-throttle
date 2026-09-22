@@ -37,15 +37,28 @@ function log(ctx: ExtensionContext, message: string) {
  *    "Handlers run in extension load and registration order." 
  * @param pi a handle to pi's extensions library
  */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Temporary
+const TEST_DELAY_MS = 5000;
+
 export default function (pi: ExtensionAPI) {
   let loggedEarlyInput = false;
 
   /**
    * A request is about to be sent. Reset this extension's per-request state
    */
-  pi.on("before_provider_request", (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
+  pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     loggedEarlyInput = false;
-    log(ctx, "[throttle] -> request sent");
+    
+    // TEMPORARY
+    log(ctx, "[throttle] -> request sent, delaying " + TEST_DELAY_MS + "ms");
+    const start = Date.now();
+    await sleep(TEST_DELAY_MS);
+    
+    log(ctx, `[throttle] .. delay done after ${Date.now() - start}ms`);
   });
 
   /**
