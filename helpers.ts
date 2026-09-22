@@ -46,3 +46,25 @@ export function extractText(value: unknown): string {
 export function estimateTokens(text: string): number {
   return (text.match(/[A-Za-z]+|[0-9]+|[^\sA-Za-z0-9]/g) ?? []).length;
 }
+
+/**
+ * Pi's types file defines event.payload as `unknown`. Agent speculation is that
+ * this is because Pi supports many providers, and each may vary its request shape.
+ *
+ * At runtime, we have a real datum, so attempt to parse it and find data
+ * on the estimated input and output token reservation.
+ */
+export function payloadHints(payload: unknown): { estInputTokens: number; maxOutputTokens: number | undefined } {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  // p.system covers Anthropic-shaped payloads; OpenAI-style payloads embed
+  // the system prompt as a role:"system" message inside p.messages instead,
+  // so it's already picked up there - the p.system call is a harmless
+  // no-op for this provider, kept for portability.
+  const text = extractText(p.system) + " " + extractText(p.messages);
+  const estInputTokens = estimateTokens(text);
+  const maxOutputTokens =
+    [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
+      (v): v is number => typeof v === "number",
+  );
+  return { estInputTokens, maxOutputTokens };
+}

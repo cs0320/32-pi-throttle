@@ -12,10 +12,11 @@ import type {
   MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import { log, sleep, extractText, estimateTokens } from "./helpers";
+import { log, sleep, payloadHints } from "./helpers";
+import { Reservation } from "./types";
 
 /**
- * Sliding window size. Using 1 minute, since it matches the TPM config unit.
+ * Window size. Using 1 minute, since it matches the TPM config unit.
  */
 const WINDOW_MS = 60_000;
 /**
@@ -25,38 +26,22 @@ const CEILING_TOKENS = 250_000;
 const MS_PER_TOKEN = WINDOW_MS / CEILING_TOKENS;
 
 /**
- * TODO
  * Prevent a very large request from stalling the session. It isn't clear 
  * whether this should be done or, if it is, what the right value is.
  */
-const MAX_DELAY_MS = 20_000;
+const MAX_DELAY_MS = 30_000;
 
 /**
- * Don't delay sending requests for under this amount of time. 
+ * Don't delay sending requests for under this amount of time. Wait for more
+ * debt to accumulate. 
  */
-const DEBT_FLOOR_MS = 500; 
+const DEBT_FLOOR_MS = 500;
 
 /**
- * Pi's types file defines event.payload as `unknown`. Agent speculation is that
- * this is because Pi supports many providers, and each may vary its request shape.
- *
- * At runtime, we have a real datum, so attempt to parse it and find data
- * on the estimated input and output token reservation.
+ * If a reservation sits unreconciled for longer than this, we count it as stale 
+ * and remove it from the reservation set. 
  */
-function payloadHints(payload: unknown): { estInputTokens: number; maxOutputTokens: number | undefined } {
-  const p = (payload ?? {}) as Record<string, unknown>;
-  // p.system covers Anthropic-shaped payloads; OpenAI-style payloads embed
-  // the system prompt as a role:"system" message inside p.messages instead,
-  // so it's already picked up there - the p.system call is a harmless
-  // no-op for this provider, kept for portability.
-  const text = extractText(p.system) + " " + extractText(p.messages);
-  const estInputTokens = estimateTokens(text);
-  const maxOutputTokens =
-    [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
-      (v): v is number => typeof v === "number",
-  );
-  return { estInputTokens, maxOutputTokens };
-}
+const RESERVATION_STALE_MS = 90_000;
 
 /**
  * Extensions export a single function that runs when the extension starts.
@@ -72,12 +57,27 @@ export default function (pi: ExtensionAPI) {
   let debtUntil = 0;
 
   /**
-   * A request is about to be sent. 
+   * A list of token reservations for "in-flight" requests. The oldest active
+   * reservation will be first on the list. 
    * 
-   * - Reset this extension's per-request state, and attempt to parse the event info 
-   * to obtain statistics like input tokens.
+   * Because pi.dev doesn't provide us with a request ID 
+   * (as of September 22, 2026) we assume that the oldest non-stale 
+   * reservation will be replied to first. This is an assumption, but 
+   * is sound absent concurrent requests (e.g., parallel tool calls).
    * 
-   * - Delay sending the request, if throttling is called for. 
+   * If parallel tool calls _are_ happening, then it is possible for this
+   * mechanism to under-count, and rate-limiting errors are possible. 
+   */
+  const reservations: Reservation[] = [];
+
+  /**
+   * A request is about to be sent.
+   *
+   * - Attempt to parse the event info to obtain statistics like input tokens.
+   * - Delay sending the request, if throttling is called for.
+   * - Reserve the request's worst-case cost (input + max output) so a
+   *   second request right behind it sees accurate debt, not the stale
+   *   pre-this-request number.
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     const now = Date.now();
@@ -85,26 +85,49 @@ export default function (pi: ExtensionAPI) {
     const { estInputTokens, maxOutputTokens } = payloadHints(event.payload);
     log(
       ctx,
-      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputTokens} est. input tokens, max output=${maxOutputTokens ?? "?"})`,
+      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputTokens} est. input tokens, max output=${maxOutputTokens ?? "?"}, ${reservations.length} reservation(s) pending)`,
     );
 
-    if (debtMs > Math.max(0,DEBT_FLOOR_MS)) {
+    if (debtMs > Math.max(0, DEBT_FLOOR_MS)) {
       const delay = Math.min(debtMs, MAX_DELAY_MS);
       const capped = delay < debtMs ? " (capped)" : "";
       log(ctx, `[throttle] bucket owes ${debtMs}ms, delaying ${delay}ms${capped}`);
       await sleep(delay);
     }
+
+    const reservedTokens = estInputTokens + (maxOutputTokens ?? 0);
+    const reservationMs = reservedTokens * MS_PER_TOKEN;
+    const sentAt = Date.now();
+    reservations.push({ timestamp: sentAt, ms: reservationMs });
+    debtUntil = Math.max(debtUntil, sentAt) + reservationMs;
+    log(ctx, `[throttle] .. reserved +${Math.round(reservationMs)}ms for ~${reservedTokens} worst-case tokens`);
   });
 
   /**
-   * A message has ended, so we should know how many output tokens were really used.
+   * A message has ended, so we should know how many output tokens were
+   * really used. True up: drop this request's provisional reservation
+   * (oldest pending, expiring anything abandoned along the way) and charge
+   * the real usage instead.
    */
   pi.on("message_end", (event: MessageEndEvent, ctx: ExtensionContext) => {
     if (event.message.role !== "assistant") return;
     const { input, output, totalTokens } = event.message.usage;
     log(ctx, `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens}`);
 
+    // Check to see if we have stale reservations. These would come from (e.g.) 
+    // requests that were ignored or errored.
     const now = Date.now();
+    while (reservations.length > 0 && now - reservations[0].timestamp > RESERVATION_STALE_MS) {
+      const stale = reservations.shift();
+      log(ctx, `[throttle] .. dropped stale reservation (+${Math.round(stale!.ms)}ms, ${now - stale!.timestamp}ms old)`);
+    }
+
+    // We should have an unreconciled reservation remaining. Recover any over-estimation.
+    const reservation = reservations.shift();
+    if (reservation) {
+      debtUntil = Math.max(0, debtUntil - reservation.ms);
+    }
+
     const charge = totalTokens * MS_PER_TOKEN;
     debtUntil = Math.max(debtUntil, now) + charge;
     log(ctx, `[throttle] .. bucket charged +${Math.round(charge)}ms (debt now clears at +${Math.round(debtUntil - now)}ms)`);
