@@ -47,6 +47,20 @@ function log(ctx: ExtensionContext, message: string) {
  */
 const WINDOW_MS = 60_000;
 
+/**
+ * Artificial cap after which we will trigger a client-side delay.
+ */
+const CEILING_TOKENS = 10_000;
+
+/**
+ * Artificial, constant delay. Consider dynamic delays later.
+ */
+const PENALTY_DELAY_MS = 3_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default function (pi: ExtensionAPI) {
   let loggedEarlyInput = false;
 
@@ -63,13 +77,18 @@ export default function (pi: ExtensionAPI) {
   /**
    * A request is about to be sent. Reset this extension's per-request state
    */
-  pi.on("before_provider_request", (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
+  pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     loggedEarlyInput = false;
     const trailing = trailingTokens(Date.now());
     log(
       ctx,
       `[throttle] -> request sent (trailing ${WINDOW_MS / 1000}s: ${trailing} tokens across ${usageWindow.length} request(s))`,
     );
+
+    if (trailing >= CEILING_TOKENS) {
+      log(ctx, `[throttle] .. over ceiling (${trailing} >= ${CEILING_TOKENS}), delaying ${PENALTY_DELAY_MS}ms`);
+      await sleep(PENALTY_DELAY_MS);
+    }
   });
 
   /**
