@@ -15,12 +15,17 @@ import type {
 
 
 /**
- * Pi.dev's TUI takes over stdout, so we should use its built-in logging function
- * rather than console.log when we can. If there's no UI ready, use console.log. 
+ * Pi.dev's TUI takes over stdout, so we shouldn't rely on console.log.
+ * It provides a ctx.ui.notify function, which we'll use instead. Note 
+ * that when its level is "info", it isn't a persistent log entry; if two 
+ * calls happen in succession between other events occurring, the latter 
+ * call will overwrite the first. This includes other extensions.
+ * 
+ * For debugging purposes, we'll use warning.
  */
 function log(ctx: ExtensionContext, message: string) {
   if (ctx.hasUI) {
-    ctx.ui.notify(message, "info");
+    ctx.ui.notify(message, "warning");
   } else {
     console.log(message);
   }
