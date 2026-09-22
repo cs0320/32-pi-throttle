@@ -36,12 +36,13 @@ function log(ctx: ExtensionContext, message: string) {
 }
 
 /**
- * Target sustained throughput: CEILING_TOKENS per WINDOW_MS. Same target
- * rate as the sliding-window version, just enforced continuously instead
- * of via a discrete array of past requests.
+ * Sliding window size. Using 1 minute, since it matches the TPM config unit.
  */
 const WINDOW_MS = 60_000;
-const CEILING_TOKENS = 100_000; // smaller than the real cap
+/**
+ * Approximate per-user tokens per minute. Slightly smaller than the real cap.
+ */
+const CEILING_TOKENS = 250_000; 
 const MS_PER_TOKEN = WINDOW_MS / CEILING_TOKENS;
 
 /**
@@ -49,7 +50,12 @@ const MS_PER_TOKEN = WINDOW_MS / CEILING_TOKENS;
  * Prevent a very large request from stalling the session. It isn't clear 
  * whether this should be done or, if it is, what the right value is.
  */
-const MAX_DELAY_MS = 15_000;
+const MAX_DELAY_MS = 20_000;
+
+/**
+ * Don't delay sending requests for under this amount of time. 
+ */
+const DEBT_FLOOR_MS = 500; 
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,9 +70,11 @@ function sleep(ms: number): Promise<void> {
  */
 function payloadHints(payload: unknown): { estInputChars: number; maxOutputTokens: number | undefined } {
   const p = (payload ?? {}) as Record<string, unknown>;
-  const estInputChars = JSON.stringify(p.system ?? "").length + JSON.stringify(p.messages ?? []).length;
-  const maxOutputTokens = [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
-    (v): v is number => typeof v === "number",
+  const estInputChars = JSON.stringify(p.system ?? "").length + 
+                        JSON.stringify(p.messages ?? []).length;
+  const maxOutputTokens = 
+    [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
+      (v): v is number => typeof v === "number",
   );
   return { estInputChars, maxOutputTokens };
 }
@@ -78,7 +86,7 @@ function payloadHints(payload: unknown): { estInputChars: number; maxOutputToken
  * @param pi a handle to pi's extensions library
  */
 export default function (pi: ExtensionAPI) {
-  let loggedEarlyInput = false;
+  //let loggedEarlyInput = false;
 
   /**
    * A "debt clock" for the "bucket" of available tokens. Once this timestamp
@@ -87,22 +95,27 @@ export default function (pi: ExtensionAPI) {
   let debtUntil = 0;
 
   /**
-   * A request is about to be sent. Reset this extension's per-request state
+   * A request is about to be sent. 
+   * 
+   * - Reset this extension's per-request state, and attempt to parse the event info 
+   * to obtain statistics like input tokens.
+   * 
+   * - Delay sending the request, if throttling is called for. 
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
-    loggedEarlyInput = false;
+    //loggedEarlyInput = false;
     const now = Date.now();
     const debtMs = Math.max(0, debtUntil - now);
     const { estInputChars, maxOutputTokens } = payloadHints(event.payload);
     log(
       ctx,
-      `[throttle] -> request sent (bucket debt: ${debtMs}ms, payload: ~${estInputChars} input chars, max_tokens=${maxOutputTokens ?? "?"})`,
+      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputChars} input chars, max output=${maxOutputTokens ?? "?"})`,
     );
 
-    if (debtMs > 0) {
+    if (debtMs > Math.max(0,DEBT_FLOOR_MS)) {
       const delay = Math.min(debtMs, MAX_DELAY_MS);
       const capped = delay < debtMs ? " (capped)" : "";
-      log(ctx, `[throttle] .. bucket owes ${debtMs}ms, delaying ${delay}ms${capped}`);
+      log(ctx, `[throttle] bucket owes ${debtMs}ms, delaying ${delay}ms${capped}`);
       await sleep(delay);
     }
   });
@@ -112,14 +125,14 @@ export default function (pi: ExtensionAPI) {
    * Since our goal is to detect the input-token count early, we don't want to 
    * do anything here beyond the first update.
    */
-  pi.on("message_update", (event: MessageUpdateEvent, ctx: ExtensionContext) => {
-    if (loggedEarlyInput || event.message.role !== "assistant") return;
-    const { input } = event.message.usage;
-    if (input > 0) {
-      loggedEarlyInput = true;
-      log(ctx, `[throttle] .. input known early: ${input} (stream event: ${event.assistantMessageEvent.type})`);
-    }
-  });
+  // pi.on("message_update", (event: MessageUpdateEvent, ctx: ExtensionContext) => {
+  //   if (loggedEarlyInput || event.message.role !== "assistant") return;
+  //   const { input } = event.message.usage;
+  //   if (input > 0) {
+  //     loggedEarlyInput = true;
+  //     log(ctx, `[throttle] .. input known early: ${input} (stream event: ${event.assistantMessageEvent.type})`);
+  //   }
+  // });
 
   /**
    * A message has ended, so we should know how many output tokens were really used.
