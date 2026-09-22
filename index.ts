@@ -22,6 +22,10 @@ import type {
  * call will overwrite the first. This includes other extensions.
  * 
  * For debugging purposes, we'll use warning.
+ * 
+ * Moreover, the TUI (as of September, 2026) gives each of these a position
+ * in the array of outputs, the elements of which can be updated (e.g., by 
+ * streaming replies). 
  */
 function log(ctx: ExtensionContext, message: string) {
   if (ctx.hasUI) {
@@ -32,33 +36,40 @@ function log(ctx: ExtensionContext, message: string) {
 }
 
 /**
- * Extensions export a single function that runs when the extension starts. 
+ * Extensions export a single function that runs when the extension starts.
  * It registers a number of callbacks corresponding to pi.dev events.
- *    "Handlers run in extension load and registration order." 
+ *    "Handlers run in extension load and registration order."
  * @param pi a handle to pi's extensions library
  */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
-// Temporary
-const TEST_DELAY_MS = 5000;
+/**
+ * How far back to look when summing current token usage.
+ */
+const WINDOW_MS = 60_000;
 
 export default function (pi: ExtensionAPI) {
   let loggedEarlyInput = false;
 
+  // Record of completed requests' token usage. This gets pruned to WINDOW_MS.
+  const usageWindow: { timestamp: number; tokens: number }[] = [];
+
+  function trailingTokens(now: number): number {
+    while (usageWindow.length > 0 && now - usageWindow[0].timestamp > WINDOW_MS) {
+      usageWindow.shift();
+    }
+    return usageWindow.reduce((sum, entry) => sum + entry.tokens, 0);
+  }
+
   /**
    * A request is about to be sent. Reset this extension's per-request state
    */
-  pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
+  pi.on("before_provider_request", (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     loggedEarlyInput = false;
-    
-    // TEMPORARY
-    log(ctx, "[throttle] -> request sent, delaying " + TEST_DELAY_MS + "ms");
-    const start = Date.now();
-    await sleep(TEST_DELAY_MS);
-    
-    log(ctx, `[throttle] .. delay done after ${Date.now() - start}ms`);
+    const trailing = trailingTokens(Date.now());
+    log(
+      ctx,
+      `[throttle] -> request sent (trailing ${WINDOW_MS / 1000}s: ${trailing} tokens across ${usageWindow.length} request(s))`,
+    );
   });
 
   /**
@@ -81,6 +92,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", (event: MessageEndEvent, ctx: ExtensionContext) => {
     if (event.message.role !== "assistant") return;
     const { input, output, totalTokens } = event.message.usage;
+    usageWindow.push({ timestamp: Date.now(), tokens: totalTokens });
     log(ctx, `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens}`);
   });
 }
