@@ -69,6 +69,28 @@ export default function (pi: ExtensionAPI) {
    * one of these that our hooks can't otherwise see. */
   const lastRequestSentAt = { current: 0 };
 
+  /** How long a request's max-output reservation might still be held by
+   * the provider's rate limiter after we've already seen its real, much
+   * smaller usage - a guess (~3.5 requests' worth of gap, at this
+   * session's request spacing), pending confirmation from real numbers. */
+  const TRAILING_RESERVATION_MS = 30_000;
+
+  /** {time, amount} for every request SENT (not completed) in the last
+   * TRAILING_RESERVATION_MS, where amount = input + declared max output -
+   * i.e. what the provider reserved for it, regardless of whether it has
+   * resolved yet. Entries are pruned by *send* time, not completion time,
+   * so a request stays counted here for the full settle window even after
+   * its real (much smaller) usage already landed in `usageHistory` above -
+   * that overlap is the point: it's what "not yet released" would look
+   * like from the outside. */
+  const reservationHistory: { time: number; amount: number }[] = [];
+
+  /** Best guess at what the *next* request's input will cost, for
+   * reservation purposes - `estInputTokens` (regex-based) badly
+   * undercounts (seen ~5x off in practice), but real conversational input
+   * only grows turn over turn, so the last real figure is a solid floor. */
+  const lastRealInput = { current: 0 };
+
   /**
    * A request is about to be sent.
    *
@@ -78,7 +100,7 @@ export default function (pi: ExtensionAPI) {
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     const now = Date.now();
-    const debtMs = Math.max(0, debt.current - now);
+    const debtMs = Math.round(Math.max(0, debt.current - now));
     const { estInputTokens, maxOutputTokens } = payloadHints(event.payload);
     log(
       ctx,
@@ -105,7 +127,12 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    lastRequestSentAt.current = Date.now();
+    const sentAt = Date.now();
+    lastRequestSentAt.current = sentAt;
+    reservationHistory.push({
+      time: sentAt,
+      amount: (lastRealInput.current || estInputTokens) + (maxOutputTokens ?? 0),
+    });
   });
 
   /**
@@ -157,6 +184,22 @@ export default function (pi: ExtensionAPI) {
     }
     const observedWindowSum = usageHistory.reduce((sum, entry) => sum + entry.tokens, 0);
     log(ctx, `[throttle] .. observed real usage in trailing ${REAL_LIMIT_WINDOW_MS}ms: ${observedWindowSum} tokens`);
+
+    // Diagnostic only, same as above - sum of (input + max output) for every
+    // request SENT within TRAILING_RESERVATION_MS, whether or not it has
+    // resolved yet. Compare `observedWindowSum + pendingReservation` against
+    // what the provider reports to test the "reservations settle with a lag"
+    // theory directly, instead of doing this arithmetic by hand after the fact.
+    while (reservationHistory.length && reservationHistory[0].time < now - TRAILING_RESERVATION_MS) {
+      reservationHistory.shift();
+    }
+    const pendingReservation = reservationHistory.reduce((sum, entry) => sum + entry.amount, 0);
+    log(
+      ctx,
+      `[throttle] .. pending reservation in trailing ${TRAILING_RESERVATION_MS}ms: ${pendingReservation} tokens (observed + pending: ${observedWindowSum + pendingReservation})`,
+    );
+
+    lastRealInput.current = input;
 
     inFlight.count = Math.max(0, inFlight.count - 1);
 
