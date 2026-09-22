@@ -36,58 +36,74 @@ function log(ctx: ExtensionContext, message: string) {
 }
 
 /**
- * Extensions export a single function that runs when the extension starts.
- * It registers a number of callbacks corresponding to pi.dev events.
- *    "Handlers run in extension load and registration order."
- * @param pi a handle to pi's extensions library
- */
-
-/**
- * How far back to look when summing current token usage.
+ * Target sustained throughput: CEILING_TOKENS per WINDOW_MS. Same target
+ * rate as the sliding-window version, just enforced continuously instead
+ * of via a discrete array of past requests.
  */
 const WINDOW_MS = 60_000;
-
-/**
- * Artificial cap after which we will trigger a client-side delay.
- */
 const CEILING_TOKENS = 10_000;
+const MS_PER_TOKEN = WINDOW_MS / CEILING_TOKENS;
 
 /**
- * Artificial, constant delay. Consider dynamic delays later.
+ * TODO
+ * Prevent a very large request from stalling the session. It isn't clear 
+ * whether this should be done or, if it is, what the right value is.
  */
-const PENALTY_DELAY_MS = 3_000;
+const MAX_DELAY_MS = 15_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Pi's types file defines event.payload as `unknown`. Agent speculation is that 
+ * this is because Pi supports many providers, and each may vary its request shape. 
+ * 
+ * At runtime, we have a real datum, so attempt to parse it and find data 
+ * on the estimated input and output token reservation. 
+ */
+function payloadHints(payload: unknown): { estInputChars: number; maxOutputTokens: number | undefined } {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const estInputChars = JSON.stringify(p.system ?? "").length + JSON.stringify(p.messages ?? []).length;
+  const maxOutputTokens = [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
+    (v): v is number => typeof v === "number",
+  );
+  return { estInputChars, maxOutputTokens };
+}
+
+/**
+ * Extensions export a single function that runs when the extension starts.
+ * It registers a number of callbacks corresponding to pi.dev events.
+ *    "Handlers run in extension load and registration order."
+ * @param pi a handle to pi's extensions library
+ */
 export default function (pi: ExtensionAPI) {
   let loggedEarlyInput = false;
 
-  // Record of completed requests' token usage. This gets pruned to WINDOW_MS.
-  const usageWindow: { timestamp: number; tokens: number }[] = [];
-
-  function trailingTokens(now: number): number {
-    while (usageWindow.length > 0 && now - usageWindow[0].timestamp > WINDOW_MS) {
-      usageWindow.shift();
-    }
-    return usageWindow.reduce((sum, entry) => sum + entry.tokens, 0);
-  }
+  /**
+   * A "debt clock" for the "bucket" of available tokens. Once this timestamp
+   * is reached, we have no more remaining token debt. (See: GCRA.)
+   */
+  let debtUntil = 0;
 
   /**
    * A request is about to be sent. Reset this extension's per-request state
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     loggedEarlyInput = false;
-    const trailing = trailingTokens(Date.now());
+    const now = Date.now();
+    const debtMs = Math.max(0, debtUntil - now);
+    const { estInputChars, maxOutputTokens } = payloadHints(event.payload);
     log(
       ctx,
-      `[throttle] -> request sent (trailing ${WINDOW_MS / 1000}s: ${trailing} tokens across ${usageWindow.length} request(s))`,
+      `[throttle] -> request sent (bucket debt: ${debtMs}ms, payload: ~${estInputChars} input chars, max_tokens=${maxOutputTokens ?? "?"})`,
     );
 
-    if (trailing >= CEILING_TOKENS) {
-      log(ctx, `[throttle] .. over ceiling (${trailing} >= ${CEILING_TOKENS}), delaying ${PENALTY_DELAY_MS}ms`);
-      await sleep(PENALTY_DELAY_MS);
+    if (debtMs > 0) {
+      const delay = Math.min(debtMs, MAX_DELAY_MS);
+      const capped = delay < debtMs ? " (capped)" : "";
+      log(ctx, `[throttle] .. bucket owes ${debtMs}ms, delaying ${delay}ms${capped}`);
+      await sleep(delay);
     }
   });
 
@@ -111,7 +127,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", (event: MessageEndEvent, ctx: ExtensionContext) => {
     if (event.message.role !== "assistant") return;
     const { input, output, totalTokens } = event.message.usage;
-    usageWindow.push({ timestamp: Date.now(), tokens: totalTokens });
     log(ctx, `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens}`);
+
+    const now = Date.now();
+    const charge = totalTokens * MS_PER_TOKEN;
+    debtUntil = Math.max(debtUntil, now) + charge;
+    log(ctx, `[throttle] .. bucket charged +${Math.round(charge)}ms (debt now clears at +${Math.round(debtUntil - now)}ms)`);
   });
 }
