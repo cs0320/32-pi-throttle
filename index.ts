@@ -41,7 +41,7 @@ function log(ctx: ExtensionContext, message: string) {
  * of via a discrete array of past requests.
  */
 const WINDOW_MS = 60_000;
-const CEILING_TOKENS = 10_000;
+const CEILING_TOKENS = 100_000; // smaller than the real cap
 const MS_PER_TOKEN = WINDOW_MS / CEILING_TOKENS;
 
 /**
