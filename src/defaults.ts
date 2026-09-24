@@ -13,6 +13,12 @@ export const DEFAULT_CONFIG = {
    * more debt to accumulate.
    */
   debtFloorMs: 500,
+  /**
+   * Show the per-request diagnostic log lines. Configurable in TUI.
+   */
+  debug: false,
+  /** Append log entries to `pi-throttle.log`. Configurable in TUI. */
+  logToFile: false,
 };
 
 export type ThrottleConfig = typeof DEFAULT_CONFIG;
