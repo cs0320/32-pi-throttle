@@ -3,7 +3,7 @@ export const DEFAULT_CONFIG = {
   windowMs: 60_000,
   /** Approximate per-user tokens per minute. Slightly smaller than the real cap. */
   //ceilingTokens: 250_000,
-  ceilingTokens: 50_000, // very small, to check that rate limiting IS happening
+  ceilingTokens: 150_000, // very small, to check that rate limiting IS happening
   /**
    * Prevent a very large request from stalling the session. It isn't clear
    * whether this should be done or, if it is, what the right value is.
