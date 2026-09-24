@@ -1,7 +1,7 @@
 export const DEFAULT_CONFIG = {
   /** Window size. Using 1 minute, since it matches the TPM config unit. */
   windowMs: 60_000,
-  /** Approximate max per-user tokens per minute. 
+  /** Approximate max per-user tokens per minute. */
   ceilingTokens: 250_000,
   /**
    * Prevent a very large request from stalling the session. It isn't clear
