@@ -33,7 +33,7 @@ Always double-check that you actually have layout information before making deci
 
 ## Limits 
 
-Never edit CLAUDE.md. 
+Never edit CLAUDE.md. Never edit README.md.
 
 Work MINIMALLY. Always confirm a new step with the user.
 

@@ -182,4 +182,37 @@ describe("commands", () => {
     await commands.get("throttle-ceiling")?.handler("", ctx);
     expect(notified(ui, "info")).toEqual([`[throttle] ceiling is ${DEFAULT_CONFIG.ceilingTokens} TPM`]);
   });
+
+  it("/throttle-max-output lowers the output cap in the returned payload, and off restores pass-through", async () => {
+    const { handler, commands, ctx } = setup();
+    const send = (payload: unknown) => handler("before_provider_request")({ payload }, ctx);
+    const payload = { messages: [], max_completion_tokens: 32768 };
+
+    expect(await send(payload)).toBeUndefined();
+
+    await commands.get("throttle-max-output")?.handler("4096", ctx);
+    expect(await send(payload)).toEqual({ messages: [], max_completion_tokens: 4096 });
+    expect(payload.max_completion_tokens).toBe(32768);
+    expect(await send({ max_tokens: 100 })).toEqual({ max_tokens: 100 });
+
+    await commands.get("throttle-max-output")?.handler("off", ctx);
+    expect(await send(payload)).toBeUndefined();
+  });
+
+  it("/throttle-max-output warns, even with debug off, when the payload has no output-token field", async () => {
+    const { handler, commands, ctx, ui } = setup();
+    await commands.get("throttle-max-output")?.handler("4096", ctx);
+    await handler("before_provider_request")({ payload: { messages: [] } }, ctx);
+    expect(notified(ui, "warning")).toContainEqual(expect.stringContaining("max output cap 4096 not applied"));
+  });
+
+  it("/throttle-max-output rejects invalid values and reports the current value", async () => {
+    const { commands, ctx, ui } = setup();
+    for (const bad of ["0", "-5", "abc", "1.5"]) {
+      await commands.get("throttle-max-output")?.handler(bad, ctx);
+    }
+    expect(notified(ui, "error")).toHaveLength(4);
+    await commands.get("throttle-max-output")?.handler("", ctx);
+    expect(notified(ui, "info")).toEqual(["[throttle] max output cap is off"]);
+  });
 });

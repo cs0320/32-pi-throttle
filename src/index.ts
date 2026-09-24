@@ -13,11 +13,12 @@ import type {
   MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import { sleep, payloadHints, isRateLimitError, makeLoggers, rateLimitHeaders } from "./helpers";
+import { sleep, payloadHints, capMaxOutput, isRateLimitError, makeLoggers, rateLimitHeaders } from "./helpers";
 import { ThrottleConfig, DEFAULT_CONFIG } from "./defaults";
 import { registerDebugCommand } from "./debug-command";
 import { registerLogCommand } from "./log-command";
 import { registerCeilingCommand } from "./ceiling-command";
+import { registerMaxOutputCommand } from "./max-output-command";
 
 /**
  * Extensions export a single function that runs when the extension starts.
@@ -32,6 +33,7 @@ export default function (pi: ExtensionAPI) {
   registerDebugCommand(pi, config);
   registerLogCommand(pi, config);
   registerCeilingCommand(pi, config);
+  registerMaxOutputCommand(pi, config);
 
   const { alwaysLog, debugLog } = makeLoggers(config);
 
@@ -85,6 +87,7 @@ export default function (pi: ExtensionAPI) {
    * - Attempt to parse the event info to obtain statistics like input tokens.
    * - Warn if another request is still outstanding (see `inFlight` above).
    * - Delay sending the request, if throttling is called for.
+   * - Lower the output-token cap, if `/throttle-max-output` is set.
    */
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     const now = Date.now();
@@ -122,6 +125,15 @@ export default function (pi: ExtensionAPI) {
     }
 
     lastSentAt.current = Date.now();
+
+    if (config.maxOutputTokens === undefined) return undefined;
+    const capped = capMaxOutput(event.payload, config.maxOutputTokens);
+    if (capped.field === undefined) {
+      alwaysLog(ctx, `[throttle] !! max output cap ${config.maxOutputTokens} not applied: no output-token field in payload`);
+    } else {
+      debugLog(ctx, `[throttle] .. ${capped.field} capped: ${capped.from} -> ${config.maxOutputTokens}`);
+    }
+    return capped.payload;
   });
 
   /**

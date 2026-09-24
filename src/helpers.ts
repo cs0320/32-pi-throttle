@@ -159,3 +159,21 @@ export function payloadHints(payload: unknown): {
   const thinkingBudget = typeof p.thinking_token_budget === "number" ? p.thinking_token_budget : undefined;
   return { estInputTokens, maxOutputTokens, maxOutputField, thinkingBudget };
 }
+
+/**
+ * Claude: returns a copy of `payload` with its output-token cap lowered to `cap`, never raised.
+ * `field` is undefined when the payload has no recognized cap field, and `payload` is then unchanged.
+ */
+export function capMaxOutput(
+  payload: unknown,
+  cap: number,
+): { payload: unknown; field: string | undefined; from: number | undefined } {
+  if (typeof payload !== "object" || payload === null) return { payload, field: undefined, from: undefined };
+  const copy: Record<string, unknown> = Object.fromEntries(Object.entries(payload));
+  const field = MAX_OUTPUT_FIELDS.find((f) => typeof copy[f] === "number");
+  if (!field) return { payload, field: undefined, from: undefined };
+  const from = copy[field];
+  if (typeof from !== "number") return { payload, field: undefined, from: undefined };
+  copy[field] = Math.min(from, cap);
+  return { payload: copy, field, from };
+}

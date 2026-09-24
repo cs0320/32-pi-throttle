@@ -24,4 +24,9 @@ export const DEFAULT_CONFIG = {
   logToFile: false,
 };
 
-export type ThrottleConfig = typeof DEFAULT_CONFIG;
+export type ThrottleConfig = typeof DEFAULT_CONFIG & {
+  /** Claude: lower each request's output-token cap to this value; unset leaves pi's value.
+   *  For live testing only: reasoning and answer share this cap, so responses may be cut off.
+   *  Configurable in TUI. */
+  maxOutputTokens?: number;
+};
