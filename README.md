@@ -29,6 +29,10 @@ The extension should apply automatically. When requests are being artificially s
 
 * `/throttle-max-output [tokens|off]`: controls an extension-based cap on output tokens per request. If `off`, the amount configured in `models.json` or elsewhere will be used. **Do not change this without talking to course staff first.**
 
+### "Warnings"
+
+Messages from the extension will appear either as temporary status notifications or as "warnings". We use warnings because "info" level log events aren't persisted in the UI.
+
 ## AI Use 
 
 This extension was created with help from Claude Opus 5.0. Most especially for: prototyping, testing, and extracting useful information on token counts etc. from API responses. 

@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI) {
     const now = Date.now();
     debugLog(
       ctx,
-      `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens} (round trip: ${now - lastSentAt.current}ms)`,
+      `[throttle] <- final usage: input=${input} output=${output} total=${totalTokens} stop=${event.message.stopReason} (round trip: ${now - lastSentAt.current}ms)`,
     );
 
     inFlight.count = Math.max(0, inFlight.count - 1);

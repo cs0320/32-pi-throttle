@@ -147,6 +147,7 @@ describe("commands", () => {
     expect(lines).toContain("[throttle] <- response status=200 x-ratelimit-remaining-tokens=5");
     expect(lines).toContain("[throttle] .. previous request failed; this is likely a pi auto-retry");
     expect(lines).toContainEqual(expect.stringContaining("max output=? via ?, thinking budget=none"));
+    expect(lines).toContainEqual(expect.stringContaining("total=0 stop=error"));
   });
 
   it("registers /throttle-log", () => {
