@@ -1,18 +1,19 @@
 export const DEFAULT_CONFIG = {
-  /** Window size. Using 1 minute, since it matches the TPM config unit. */
+  /** Window size. Using 1 minute, since it matches the TPM config unit.
+   *  This should not be changed. */
   windowMs: 60_000,
-  /** Approximate max per-user tokens per minute. */
-  ceilingTokens: 300_000,
-  /**
-   * Prevent a very large request from stalling the session. It isn't clear
-   * whether this should be done or, if it is, what the right value is.
-   */
-  maxDelayMs: 20_000,
+  /** Prevent a very large request from stalling the session. 
+   * Same as windowMs for now.*/
+  maxDelayMs: 60_000,
+  
   /**
    * Don't delay sending requests for under this amount of time. Wait for
-   * more debt to accumulate.
-   */
-  debtFloorMs: 500,
+   * more debt to accumulate. */
+  debtFloorMs: 200,
+  
+  /** Approximate max per-user tokens per minute. */
+  ceilingTokens: 300_000,
+  
   /**
    * Show the per-request diagnostic log lines. Configurable in TUI.
    */
