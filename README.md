@@ -25,7 +25,7 @@ The extension should apply automatically. When requests are being artificially s
 
 * `/throttle-log off|on`: logging to a file on/off (default: off). For the moment, the file name and location are constant: `pi-throttle.log` in the current directory.
 
-* `/throttle-ceiling [tokens]`: show or set the approximate tokens-per-minute ceiling (default: 300000). **Do not change this without talking to course staff first.**
+* `/throttle-ceiling [tokens]`: show or set the approximate tokens-per-minute ceiling (default: 300000). **Do not change this without talking to course staff first.** The default may not match the actual server-side TPM limit, and there are reasons for that.
 
 * `/throttle-max-output [tokens|off]`: controls an extension-based cap on output tokens per request. If `off`, the amount configured in `models.json` or elsewhere will be used. **Do not change this without talking to course staff first.**
 
