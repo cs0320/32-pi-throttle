@@ -113,7 +113,9 @@ export function rateLimitHeaders(headers: Record<string, string>): string {
  */
 export function isRateLimitError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
-  return /429|rate[ -]?limit/i.test(errorMessage);
+  // Claude: pi's messages lead with the HTTP status, after an optional retry-delay prefix.
+  // Anchoring keeps "429" elsewhere (e.g., "33,429 tokens") from matching.
+  return /^(?:Server requested [^.]*\. )?429\b|rate[ _-]?limit/i.test(errorMessage);
 }
 
 /**

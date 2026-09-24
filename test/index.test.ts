@@ -107,12 +107,24 @@ describe("throttle", () => {
     expect(await delayOf(request)).toBe(0);
   });
 
-  it("penalizes again on a later request", async () => {
-    const { handler, request, ctx, ui } = setup();
+  it("penalizes pi's retries of a 429 only once", async () => {
+    const { request, messageEnd, ui } = setup();
     await request();
-    handler("after_provider_response")({ status: 429, headers: {} }, ctx);
+    messageEnd(0, { stopReason: "error", errorMessage: "429 status code (no body)" });
     await delayOf(request);
-    handler("after_provider_response")({ status: 429, headers: {} }, ctx);
+    messageEnd(0, { stopReason: "error", errorMessage: "429 status code (no body)" });
+    expect(notified(ui, "warning")).toHaveLength(1);
+    expect(await delayOf(request)).toBeLessThan(DEFAULT_CONFIG.maxDelayMs);
+  });
+
+  it("penalizes again after a request succeeds", async () => {
+    const { request, messageEnd, ui } = setup();
+    await request();
+    messageEnd(0, { stopReason: "error", errorMessage: "429 status code (no body)" });
+    await delayOf(request);
+    messageEnd(0);
+    await delayOf(request);
+    messageEnd(0, { stopReason: "error", errorMessage: "429 status code (no body)" });
     expect(notified(ui, "warning")).toHaveLength(2);
   });
 

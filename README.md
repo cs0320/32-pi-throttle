@@ -40,3 +40,16 @@ This extension was created with help from Claude Opus 5.0. Most especially for: 
 ## What is *NOT* done? 
 
 Options are not persisted between runs of `pi`. 
+
+Compaction requests aren't counted. Neither are any cache-warming requests.
+
+Multiple pi processes aren't handled, nor are sub-agents (not used in 0320/1340 at present).
+
+Very large requests can overflow capacity if they go out after all others have cleared the throttling window.
+
+Aborted or failed streams aren't counted, unless their error message matches the regex used to detect 429s.
+
+Restarts, `\tree`, etc. change nothing about the current throttle state. `/throttle-ceiling` doesn't either.
+
+
+

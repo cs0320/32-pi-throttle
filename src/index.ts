@@ -66,14 +66,16 @@ export default function (pi: ExtensionAPI) {
     debt.current = Math.max(debt.current, now) + ms;
   };
 
-  /** Has the current request's 429 already been penalized? Used to disambiguate 
-   * rate-limit behavior between providers. See after_provider_response. */
+  /** Claude: has the current run of rate-limited requests already been penalized?
+   * Cleared when a request ends without error, so pi's retries after a 429 don't
+   * each add a window. Also dedupes a 429 seen in both after_provider_response
+   * and message_end. */
   const penalized = { current: false };
 
   /** Helper for clarity: add a full window of debt if rate-limited. */
   const penalize = (ctx: ExtensionContext, reason: string) => {
     if (penalized.current) {
-      debugLog(ctx, `[throttle] .. ${reason} - already penalized for this request, skipping`);
+      debugLog(ctx, `[throttle] .. ${reason} - already penalized since the last successful request, skipping`);
       return;
     }
     penalized.current = true;
@@ -110,7 +112,6 @@ export default function (pi: ExtensionAPI) {
       lastEndedInError.current = false;
     }
     inFlight.count++;
-    penalized.current = false;
 
     if (debtMs > Math.max(0, config.debtFloorMs)) {
       const delay = Math.min(debtMs, config.maxDelayMs);
@@ -181,6 +182,8 @@ export default function (pi: ExtensionAPI) {
       if (isRateLimitError(event.message.errorMessage)) {
         penalize(ctx, "rate-limit error");
       }
+    } else {
+      penalized.current = false;
     }
   });
 }
