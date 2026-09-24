@@ -10,6 +10,13 @@ Install from within sandbox (if applicable) directly from Github:
 
 `pi install git:github.com/cs0320/32-pi-throttle`
 
+Use the same command to update. You should see the usual `git pull` spam afterward, e.g., `remote: Enumerating objects...`. If you only see the following, then the update has **not** occurred:
+
+```
+Installing git:github.com/cs0320/32-pi-throttle...
+Installed git:github.com/cs0320/32-pi-throttle
+```
+
 ## Usage 
 
 The extension should apply automatically. When requests are being artificially slowed, you should see a `...Waiting` notification, listing the delay that's been added. Aborting the current request will also abort the added delay.
