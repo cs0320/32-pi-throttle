@@ -11,12 +11,14 @@ export const DEFAULT_CONFIG = {
    * more debt to accumulate. */
   debtFloorMs: 200,
   
-  /** Approximate max per-user tokens per minute. */
+  /** Approximate max per-user tokens per minute. Configurable in TUI. 
+   *  However: changing the ceiling should not be done without talking 
+   *  to course staff first. We have observed over-eager rate limiting 
+   *  on the 0320/1340 LLM server in September 2026.
+  */
   ceilingTokens: 300_000,
   
-  /**
-   * Show the per-request diagnostic log lines. Configurable in TUI.
-   */
+  /** Show the per-request diagnostic log lines. Configurable in TUI. */
   debug: false,
   /** Append log entries to `pi-throttle.log`. Configurable in TUI. */
   logToFile: false,

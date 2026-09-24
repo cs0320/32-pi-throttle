@@ -136,18 +136,26 @@ function estimateTokens(text: string): number {
   return (text.match(/[A-Za-z]+|[0-9]+|[^\sA-Za-z0-9]/g) ?? []).length;
 }
 
+/** Payload fields that may carry the output-token cap, depending on provider. */
+const MAX_OUTPUT_FIELDS = ["max_tokens", "max_output_tokens", "max_completion_tokens"] as const;
+
 /**
  * Pi's types file defines event.payload as `unknown`.
  * Attempt to parse the datum at runtime and find data
  * on the estimated input and output token reservation.
  */
-export function payloadHints(payload: unknown): { estInputTokens: number; maxOutputTokens: number | undefined } {
+export function payloadHints(payload: unknown): {
+  estInputTokens: number;
+  maxOutputTokens: number | undefined;
+  maxOutputField: string | undefined;
+  thinkingBudget: number | undefined;
+} {
   const p = (payload ?? {}) as Record<string, unknown>;
   const text = extractText(p.system) + " " + extractText(p.messages);
   const estInputTokens = estimateTokens(text);
-  const maxOutputTokens =
-    [p.max_tokens, p.max_output_tokens, p.max_completion_tokens].find(
-      (v): v is number => typeof v === "number",
-  );
-  return { estInputTokens, maxOutputTokens };
+  const maxOutputField = MAX_OUTPUT_FIELDS.find((field) => typeof p[field] === "number");
+  const maxOutput = maxOutputField ? p[maxOutputField] : undefined;
+  const maxOutputTokens = typeof maxOutput === "number" ? maxOutput : undefined;
+  const thinkingBudget = typeof p.thinking_token_budget === "number" ? p.thinking_token_budget : undefined;
+  return { estInputTokens, maxOutputTokens, maxOutputField, thinkingBudget };
 }

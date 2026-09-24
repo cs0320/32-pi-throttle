@@ -58,16 +58,26 @@ describe("payloadHints", () => {
       messages: [{ role: "user", content: [{ type: "text", text: "a b" }] }],
       max_tokens: 100,
     });
-    expect(hints).toEqual({ estInputTokens: 4, maxOutputTokens: 100 });
+    expect(hints).toEqual({ estInputTokens: 4, maxOutputTokens: 100, maxOutputField: "max_tokens", thinkingBudget: undefined });
   });
 
   it("reads OpenAI-style output limits", () => {
     expect(payloadHints({ max_completion_tokens: 7 }).maxOutputTokens).toBe(7);
     expect(payloadHints({ max_output_tokens: 8 }).maxOutputTokens).toBe(8);
+    expect(payloadHints({ max_completion_tokens: 7 }).maxOutputField).toBe("max_completion_tokens");
+  });
+
+  it("reads thinking_token_budget", () => {
+    expect(payloadHints({ max_tokens: 100, thinking_token_budget: 40 }).thinkingBudget).toBe(40);
   });
 
   it("handles a missing payload", () => {
-    expect(payloadHints(undefined)).toEqual({ estInputTokens: 0, maxOutputTokens: undefined });
+    expect(payloadHints(undefined)).toEqual({
+      estInputTokens: 0,
+      maxOutputTokens: undefined,
+      maxOutputField: undefined,
+      thinkingBudget: undefined,
+    });
   });
 });
 

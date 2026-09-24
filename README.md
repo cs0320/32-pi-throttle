@@ -18,7 +18,14 @@ The extension should apply automatically. When requests are being artificially s
 
 * `/throttle-log off|on`: logging to a file on/off (default: off). For the moment, the file name and location are constant: `pi-throttle.log` in the current directory.
 
+* `/throttle-ceiling [tokens]`: show or set the approximate tokens-per-minute ceiling (default: 300000). Only change this after talking to course staff.
+
 
 ## AI Use 
 
 This extension was created with help from Claude Opus 5.0. Most especially for: prototyping, testing, and extracting useful information on token counts etc. from API responses. 
+
+## What is *NOT* done? 
+
+Options are not persisted between runs of `pi`. 
+

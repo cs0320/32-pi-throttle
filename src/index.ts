@@ -17,6 +17,7 @@ import { sleep, payloadHints, isRateLimitError, makeLoggers, rateLimitHeaders } 
 import { ThrottleConfig, DEFAULT_CONFIG } from "./defaults";
 import { registerDebugCommand } from "./debug-command";
 import { registerLogCommand } from "./log-command";
+import { registerCeilingCommand } from "./ceiling-command";
 
 /**
  * Extensions export a single function that runs when the extension starts.
@@ -30,6 +31,7 @@ export default function (pi: ExtensionAPI) {
 
   registerDebugCommand(pi, config);
   registerLogCommand(pi, config);
+  registerCeilingCommand(pi, config);
 
   const { alwaysLog, debugLog } = makeLoggers(config);
 
@@ -87,10 +89,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_provider_request", async (event: BeforeProviderRequestEvent, ctx: ExtensionContext) => {
     const now = Date.now();
     const debtMs = Math.round(Math.max(0, debt.current - now));
-    const { estInputTokens, maxOutputTokens } = payloadHints(event.payload);
+    const { estInputTokens, maxOutputTokens, maxOutputField, thinkingBudget } = payloadHints(event.payload);
     debugLog(
       ctx,
-      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputTokens} est. input tokens, max output=${maxOutputTokens ?? "?"})`,
+      `[throttle] request (bucket debt: ${debtMs}ms, payload: ~${estInputTokens} est. input tokens, ` +
+        `max output=${maxOutputTokens ?? "?"} via ${maxOutputField ?? "?"}, thinking budget=${thinkingBudget ?? "none"})`,
     );
 
     if (inFlight.count > 0) {

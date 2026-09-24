@@ -98,8 +98,9 @@ describe("throttle", () => {
     messageEnd(0, { stopReason: "error", errorMessage: "429 Too Many Requests" });
     expect(notified(ui, "warning")).toEqual([expect.stringContaining("429 received - forcing a full window")]);
 
-    // Claude: one window (60s) of debt at the 20s cap clears in three requests; two windows would take six.
-    for (let i = 0; i < 3; i++) {
+    // Claude: one window of debt clears after this many capped delays; two windows would take twice as many.
+    const cappedRequests = Math.ceil(DEFAULT_CONFIG.windowMs / DEFAULT_CONFIG.maxDelayMs);
+    for (let i = 0; i < cappedRequests; i++) {
       expect(await delayOf(request)).toBeGreaterThanOrEqual(DEFAULT_CONFIG.maxDelayMs);
       messageEnd(0);
     }
@@ -145,10 +146,40 @@ describe("commands", () => {
     const lines = notified(ui, "warning");
     expect(lines).toContain("[throttle] <- response status=200 x-ratelimit-remaining-tokens=5");
     expect(lines).toContain("[throttle] .. previous request failed; this is likely a pi auto-retry");
+    expect(lines).toContainEqual(expect.stringContaining("max output=? via ?, thinking budget=none"));
   });
 
   it("registers /throttle-log", () => {
     const { commands } = setup();
     expect(commands.has("throttle-log")).toBe(true);
+  });
+
+  it("/throttle-ceiling changes the per-token charge", async () => {
+    const { request, messageEnd, commands, ctx } = setup();
+    await commands.get("throttle-ceiling")?.handler(String(DEFAULT_CONFIG.ceilingTokens * 2), ctx);
+    await request();
+    messageEnd(tokensFor(10_000));
+    const delay = await delayOf(request);
+    expect(delay).toBeGreaterThanOrEqual(5_000);
+    expect(delay).toBeLessThan(5_200);
+  });
+
+  it("/throttle-ceiling rejects invalid values and leaves the ceiling unchanged", async () => {
+    const { request, messageEnd, commands, ctx, ui } = setup();
+    for (const bad of ["0", "-5", "abc", "1.5", "1e6"]) {
+      await commands.get("throttle-ceiling")?.handler(bad, ctx);
+    }
+    expect(notified(ui, "error")).toHaveLength(5);
+    await request();
+    messageEnd(tokensFor(5_000));
+    const delay = await delayOf(request);
+    expect(delay).toBeGreaterThanOrEqual(5_000);
+    expect(delay).toBeLessThan(5_200);
+  });
+
+  it("/throttle-ceiling with no argument reports the current value", async () => {
+    const { commands, ctx, ui } = setup();
+    await commands.get("throttle-ceiling")?.handler("", ctx);
+    expect(notified(ui, "info")).toEqual([`[throttle] ceiling is ${DEFAULT_CONFIG.ceilingTokens} TPM`]);
   });
 });
